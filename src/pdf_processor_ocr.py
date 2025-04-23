@@ -60,19 +60,26 @@ def extract_pdf_information(pdf_path):
             text_psm3 = pytesseract.image_to_string(image, config=r'--oem 3 --psm 3 -l chi_sim')
             lines_psm3 = [line.strip() for line in text_psm3.split('\n') if line.strip()]
 
+            # 提取赛项名称和赛道 (根据用户反馈调整顺序：第一行是赛道，第二行是赛项名称)
             if len(lines_psm3) >= 1:
-                potential_comp_name = lines_psm3[0]
-                if len(potential_comp_name) > 5 and ("赛" in potential_comp_name or "挑战" in potential_comp_name):
-                     extracted_data["赛项名称"] = potential_comp_name
-            if len(lines_psm3) >= 2:
-                potential_track_name = lines_psm3[1]
+                # 第一行视为赛道
+                potential_track_name = lines_psm3[0]
+                # 赛道过滤条件 (简单判断)
                 if len(potential_track_name) > 3 and ("赛" in potential_track_name or "组" in potential_track_name) and not re.search(r'\d{4}年', potential_track_name):
                     extracted_data["赛道"] = potential_track_name
-                elif extracted_data["赛项名称"] and len(lines_psm3) == 1 and ' ' in extracted_data["赛项名称"]:
-                    parts = extracted_data["赛项名称"].split(' ', 1)
-                    if len(parts) == 2 and len(parts[1]) > 3:
-                        extracted_data["赛项名称"] = parts[0].strip()
-                        extracted_data["赛道"] = parts[1].strip()
+            if len(lines_psm3) >= 2:
+                # 第二行视为赛项名称
+                potential_comp_name = lines_psm3[1]
+                # 赛项名称过滤条件 (简单判断)
+                if len(potential_comp_name) > 5 and ("赛" in potential_comp_name or "挑战" in potential_comp_name):
+                     extracted_data["赛项名称"] = potential_comp_name
+                # 如果第二行不像赛项名称，但第一行像赛道，尝试将第一行拆分 (OCR可能合并)
+                # 这个逻辑可能需要调整或移除，取决于 OCR 实际效果
+                # elif extracted_data["赛道"] and len(lines_psm3) == 1 and ' ' in extracted_data["赛道"]:
+                #     parts = extracted_data["赛道"].split(' ', 1)
+                #     if len(parts) == 2 and len(parts[1]) > 3:
+                #         extracted_data["赛道"] = parts[0].strip()
+                #         extracted_data["赛项名称"] = parts[1].strip()
 
             # OCR for Org/Date (PSM 6)
             text_psm6 = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6 -l chi_sim')
@@ -136,35 +143,93 @@ def extract_pdf_information(pdf_path):
                            extracted_data["组织单位"] = potential_unit
 
         # --- 3. 从全文文本中提取报名时间和官网 --- 
+        # 注意：这里我们在 full_text (保留换行符) 上搜索，而不是 full_text_cleaned
 
-        # 提取报名时间 (模式: 报名时间[::\s].*?([\\d]{4}年.*?日)) - 匹配到第一个日期
-        # 更宽松的模式，匹配 "报名时间" 后的第一个日期范围或单个日期
-        # (?:报名时间|提交时间|报名阶段|时间安排)[::\s]+([^，。；]*?(?:\\d{4}\\s*年.*?月.*?日|至|—|－|-|~)[^，。；]*)?
-        # 匹配关键字后直到下一个标点符号的内容，并尝试从中找日期模式
+        # 提取报名时间
+        # 模式解释:
+        # (?:报名时间|作品提交时间|提交时间|报名阶段|时间安排|报名起止|提交起止) - 匹配各种可能的关键字
+        # \s*[:：]\s* - 匹配关键字后的冒号和可选空格/换行
+        # (                            - 开始捕获组 (报名时间的具体内容)
+        #   [^，。；(（]*?             - 非贪婪地匹配任何非结束标点符号的字符
+        #   (?:                     - 开始日期模式部分
+        #     (?:\d{4}\s*年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日? - 匹配 YYYY年MM月DD日 (年和日可选)
+        #     (?:\s*(?:至|—|－|-|~|到)\s*(?:\d{4}\s*年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日?)? - 匹配可选的结束日期
+        #     | \d{1,2}\s*月\s*\d{1,2}\s*日? - 或者只匹配 MM月DD日
+        #     | \d{4}\s*年 - 或者只匹配 YYYY年 
+        #   )                         - 结束日期模式部分
+        #   [^，。；(（]*?             - 再次非贪婪匹配，直到结束标点
+        # )                            - 结束捕获组
+        # 修改后的正则，更灵活处理换行和空格，并捕获关键字后的相关文本块直到明显的分隔符或下一主题。
+        # 修改后的正则，加入“报名起始时间”关键字
         registration_match = re.search(
-            r'(?:报名时间|作品提交时间|提交时间|报名阶段|时间安排)\s*[:\s]+([^，。；\n\(（]+(?:(?:\\d{4}\\s*年)?\\s*\\d{1,2}\\s*月\\s*\\d{1,2}\\s*日?\\s*(?:至|—|－|-|~|到)\\s*(?:\\d{4}\\s*年)?\\s*\\d{1,2}\\s*月\\s*\\d{1,2}\\s*日?|\\d{4}\\s*年\\s*\\d{1,2}\\s*月\\s*\\d{1,2}\\s*日?))',
-            full_text_cleaned)
-        if registration_match:
-            extracted_data["报名时间"] = registration_match.group(1).strip()
-        else: # 备用：尝试查找"报名起止"类的关键字
-            registration_match_alt = re.search(r'(?:报名起止|提交起止)\s*[:\s]+([^，。；\n\(（]+)', full_text_cleaned)
-            if registration_match_alt:
-                 potential_time = registration_match_alt.group(1).strip()
-                 # 确认包含日期信息
-                 if re.search(r'\d{1,2}\s*月\s*\d{1,2}\s*日', potential_time):
-                      extracted_data["报名时间"] = potential_time
+            r'(报名时间|作品提交时间|提交时间|报名阶段|时间安排|报名起止|提交起止|报名起始时间)\s*[:：]\s*([\s\S]*?)(?=\n\s*\n|[\n\r](?:[二三四五六七八九十]|\d+\.|\(.)\)|(?:提交方式|官网|联系方式|评审方式|奖项设置))'\
+            , full_text, re.IGNORECASE) # 忽略大小写
 
-        # 提取官网 (模式: 官网|网站[::\s].*?(https?://[\w\./-=&%#]+))
-        website_match = re.search(r'(?:官网|官方网站|大赛网址|网站|网址)\s*[:\s]*(https?:\\/\\/[^,\.;\)）]+)', full_text_cleaned)
+        registration_text = None
+        if registration_match:
+            # 从匹配到的文本块中提取最可能的日期描述
+            block = registration_match.group(2).strip()
+            # 优先查找包含年份的完整日期或范围
+            # 优化后的 date_detail_match 正则表达式，更明确地处理范围
+            date_detail_match = re.search(
+                # Group 1: 完整范围 YYYY年MM月DD日 - (YYYY年)?MM月DD日
+                r'(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日?\s*(?:至|—|－|-|~|到)\s*(?:\d{4}\s*年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日?)' +\
+                # Group 2: 单独日期 YYYY年MM月DD日
+                r'|(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日?)' +\
+                # Group 3: 无年份范围 MM月DD日 - MM月DD日
+                r'|(\d{1,2}\s*月\s*\d{1,2}\s*日?\s*(?:至|—|－|-|~|到)\s*\d{1,2}\s*月\s*\d{1,2}\s*日?)' +\
+                # Group 4: 单独无年份日期 MM月DD日 (优先级最低)
+                r'|(\d{1,2}\s*月\s*\d{1,2}\s*日?)'\
+                , block)
+            if date_detail_match:
+                 # 选择第一个非空的匹配组
+                 registration_text = next((g for g in date_detail_match.groups() if g), None)
+                 # 尝试扩展捕获范围以包含附近的文本
+                 start_index = block.find(registration_text)
+                 end_index = start_index + len(registration_text)
+                 # 向前回溯查找可能的前缀（如"即日起"）
+                 prefix_search_area = block[:start_index]
+                 prefix_match = re.search(r'(即日起|自发布之日)\s*([至|—|－|-|~|到])?\s*$', prefix_search_area)
+                 if prefix_match:
+                     registration_text = prefix_match.group(1) + (prefix_match.group(2) or '至') + registration_text
+                 # 向后查找可能的后缀 (如 "止")
+                 suffix_search_area = block[end_index:]
+                 suffix_match = re.match(r'^\s*(止|截止)', suffix_search_area)
+                 if suffix_match:
+                     registration_text += suffix_match.group(1)
+            else:
+                 # 如果找不到精确日期，就取整个块，但限制长度避免太长
+                 registration_text = block[:100] # 限制最大长度
+
+        extracted_data["报名时间"] = registration_text
+
+        # 提取官网
+        # 模式解释：
+        # (?:官网|官方网站|大赛网址|网站|网址) - 匹配关键字
+        # \s*[:：]?\s* - 匹配可选的冒号和空格/换行
+        # (https?:\/\/[^\s\"\'<>，。；)）]+) - 捕获 URL，直到空格或特定标点
+        website_match = re.search(
+            r'(官网|官方网站|大赛网址|网站|网址)\s*[:：]?\s*(https?:\/\/[^\s\"\'<>，。；)）]+)'\
+            , full_text, re.IGNORECASE)
         if website_match:
-            extracted_data["官网"] = website_match.group(1).strip()
-        else: # 备用：直接查找 URL
-             url_match = re.search(r'(https?:\\/\\/[\\w\\.\\-\\/]+\\.(?:com|cn|org|net|edu))[,\.;\)）]', full_text_cleaned)
-             if url_match:
-                 # 确认这个 URL 前面有相关字眼，避免误提取
-                 search_window = full_text_cleaned[max(0, url_match.start()-30):url_match.start()]
-                 if any(kw in search_window for kw in ["官网", "网站", "网址", "链接", "平台"]):
-                     extracted_data["官网"] = url_match.group(1).strip()
+            extracted_data["官网"] = website_match.group(2).strip()
+        else:
+            # 备用：直接查找看起来像官网的 URL (通常包含 contest, challenge, competition, edu 等关键字)
+            # 这个正则比较宽松，可能会误匹配，但作为备用方案
+            url_match = re.search(
+                r'(https?:\/\/[\w\.\-\/]+\.(?:com|cn|org|net|edu)[\w\.\-\/]*)' + # 匹配基础URL结构
+                r'(?=[\s，。；)）]|\n)' # URL后面应该是空格或标点
+                , full_text)
+            if url_match:
+                 url = url_match.group(1).strip()
+                 # 简单检查 URL 是否看起来像一个主页或竞赛页面
+                 if len(url) > 10 and ('.gov' not in url and '.pdf' not in url) : # 过滤掉一些明显不是官网的链接
+                    # 进一步确认：检查URL附近是否有相关关键词 (在 full_text 中检查，范围更大)
+                    context_window_start = max(0, url_match.start() - 50)
+                    context_window_end = min(len(full_text), url_match.end() + 50)
+                    context_window = full_text[context_window_start:context_window_end]
+                    if any(kw in context_window for kw in ["官网", "网站", "网址", "链接", "平台", "大赛", "竞赛", "报名"]):
+                        extracted_data["官网"] = url
 
         doc.close()
 
