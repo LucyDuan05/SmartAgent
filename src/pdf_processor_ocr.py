@@ -1,3 +1,4 @@
+
 import os
 import re
 import fitz  # PyMuPDF
@@ -11,8 +12,8 @@ import pandas as pd # 添加 pandas 用于写入 Excel
 # 例如: pytesseract.pytesseract.tesseract_cmd = r'/usr/local/bin/tesseract' # macOS/Linux
 # 例如: pytesseract.pytesseract.tesseract_cmd = r'C:\\Program Files\\Tesseract-OCR\\tesseract.exe' # Windows
 
-PDF_DIR = "/Users/tcw/Desktop/SmartAgent/data/raw"  # PDF 文件所在的目录 (相对于脚本的位置)
-OUTPUT_EXCEL = "/Users/tcw/Desktop/SmartAgent/results/result_1.xlsx" # 输出 Excel 文件路径
+PDF_DIR = "D:\\SmartAgent\\SmartAgent\\data\\raw"  # PDF 文件所在的目录 (相对于脚本的位置)
+OUTPUT_EXCEL = "D:\\SmartAgent\\SmartAgent\\results\\result1.xlsx" # 输出 Excel 文件路径
 # -------------
 
 def extract_pdf_information(pdf_path):
@@ -62,17 +63,17 @@ def extract_pdf_information(pdf_path):
 
             # 提取赛项名称和赛道 (根据用户反馈调整顺序：第一行是赛道，第二行是赛项名称)
             if len(lines_psm3) >= 1:
-                # 第一行视为赛道
+                # 第二行视为赛道
                 potential_track_name = lines_psm3[0]
                 # 赛道过滤条件 (简单判断)
-                if len(potential_track_name) > 3 and ("赛" in potential_track_name or "组" in potential_track_name) and not re.search(r'\d{4}年', potential_track_name):
-                    extracted_data["赛道"] = potential_track_name
+                if len(potential_track_name) > 3 and ("赛" in potential_track_name or "组" in potential_track_name) and not re.search(r'\d{4}年', potential_track_name) :
+                    extracted_data["赛项名称"] = potential_track_name
             if len(lines_psm3) >= 2:
-                # 第二行视为赛项名称
+                # 第一行视为赛项名称
                 potential_comp_name = lines_psm3[1]
                 # 赛项名称过滤条件 (简单判断)
                 if len(potential_comp_name) > 5 and ("赛" in potential_comp_name or "挑战" in potential_comp_name):
-                     extracted_data["赛项名称"] = potential_comp_name
+                     extracted_data["赛道"] = potential_comp_name
                 # 如果第二行不像赛项名称，但第一行像赛道，尝试将第一行拆分 (OCR可能合并)
                 # 这个逻辑可能需要调整或移除，取决于 OCR 实际效果
                 # elif extracted_data["赛道"] and len(lines_psm3) == 1 and ' ' in extracted_data["赛道"]:
@@ -80,6 +81,12 @@ def extract_pdf_information(pdf_path):
                 #     if len(parts) == 2 and len(parts[1]) > 3:
                 #         extracted_data["赛道"] = parts[0].strip()
                 #         extracted_data["赛项名称"] = parts[1].strip()
+            if not extracted_data["赛道"] :
+                # 第一行视为赛项名称
+                potential_comp_name = lines_psm3[2]
+                # 赛项名称过滤条件 (简单判断)
+                if len(potential_comp_name) > 5 and ("赛" in potential_comp_name or "挑战" in potential_comp_name):
+                     extracted_data["赛道"] = potential_comp_name
 
             # OCR for Org/Date (PSM 6)
             text_psm6 = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6 -l chi_sim')
@@ -102,7 +109,7 @@ def extract_pdf_information(pdf_path):
 
             if date_line_index > 0:
                 potential_unit = lines_psm6[date_line_index - 1]
-                if len(potential_unit) > 3 and not potential_unit.isdigit():
+                if len(potential_unit) > 4 and not potential_unit.isdigit():
                     extracted_data["组织单位"] = potential_unit
             elif lines_psm6:
                  keywords = ["中心", "委员会", "协会", "学会", "办公室", "组委会"]
@@ -113,8 +120,8 @@ def extract_pdf_information(pdf_path):
                          unit_found_psm6 = True
                          break
                  if not unit_found_psm6 and extracted_data["发布时间"] and lines_psm6[-1] != extracted_data["发布时间"]:
-                    potential_unit = lines_psm6[-1]
-                    if len(potential_unit) > 3 and not potential_unit.isdigit():
+                    potential_unit = lines_psm6[-2]
+                    if len(potential_unit) > 4 and not potential_unit.isdigit():
                         extracted_data["组织单位"] = potential_unit
 
             if not extracted_data["组织单位"]:
@@ -138,7 +145,7 @@ def extract_pdf_information(pdf_path):
                             extracted_data["组织单位"] = line
                             break
                     if not extracted_data["组织单位"] and extracted_data["发布时间"] and lines_psm3_lower[-1] != extracted_data["发布时间"]:
-                        potential_unit = lines_psm3_lower[-1]
+                        potential_unit = lines_psm3_lower[-2]
                         if len(potential_unit) > 3 and not potential_unit.isdigit():
                            extracted_data["组织单位"] = potential_unit
 
@@ -262,7 +269,7 @@ def main():
             data = extract_pdf_information(pdf_path)
             all_extracted_data.append(data)
 
-            # 打印当前文件提取结果
+            # 打印当前文件提取结果，介于开始设置的赛道及赛项名称的标签有误，故此处做简单调换
             print(f"  赛项名称: {data['赛项名称'] if data['赛项名称'] else '未能提取'}")
             print(f"  赛道:     {data['赛道'] if data['赛道'] else '未能提取'}")
             print(f"  组织单位: {data['组织单位'] if data['组织单位'] else '未能提取'}")
@@ -280,8 +287,8 @@ def main():
             os.makedirs(output_dir)
 
         df = pd.DataFrame(all_extracted_data)
-        # 按照要求的列顺序排列
-        column_order = ["赛项名称", "赛道", "发布时间", "报名时间", "组织单位", "官网"]
+        # 按照要求的列顺序排列。介于开始设置的赛道及赛项名称的标签有误，故此处做简单调换
+        column_order = ["赛项名称" ,"赛道" , "发布时间", "报名时间", "组织单位", "官网"]     
         df = df[column_order]
 
         try:
