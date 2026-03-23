@@ -1,6 +1,9 @@
-import google.generativeai as genai
 import os
 from typing import List, Dict, Any, Tuple
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 从 vector_store 模块导入 HybridVectorStore 类
 # 确保 vector_store.py 在 Python 的路径中，或者在同一个目录下
@@ -8,32 +11,25 @@ try:
     from vector_store import HybridVectorStore
 except ImportError:
     print("错误：无法导入 HybridVectorStore。请确保 vector_store.py 在 Python 路径或同级目录中。")
-    # 可以选择退出或提供默认实现/占位符
     exit(1) 
 
 # --- 配置 ---
-# !! 安全警告: 不建议在代码中硬编码 API 密钥 !!
-# !! 请考虑使用环境变量或配置文件 !!
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCE5MzNYr2EK65NlwAHorD2saD-lb1JXmc") # 优先使用环境变量
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Gemini 模型配置
-GENERATION_MODEL_NAME = "gemini-2.5-pro-exp-03-25" # 使用用户指定的主模型
-# GENERATION_MODEL_NAME = "models/gemini-2.0-flash" # 备选模型 (用户确认可用)
-# HybridVectorStore 使用的索引路径（应与 vector_store.py 中的配置一致）
-# 如果 vector_store.py 中的路径被修改，这里也需要同步修改
-DEFAULT_INDEX_PATH = "D:/SmartAgent/SmartAgent/data1/embeddings/vector_store.index"
-DEFAULT_METADATA_PATH = "D:/SmartAgent/SmartAgent/data1/embeddings/chunks_with_metadata.pkl"
-DEFAULT_BM25_PATH = "D:/SmartAgent/SmartAgent/data1/embeddings/bm25_index.pkl"
+# OpenRouter 模型配置（用户指定）
+GENERATION_MODEL_NAME = "stepfun/step-3.5-flash:free"
+
+# 获取项目根目录
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 存储索引和文本数据的文件路径
-DEFAULT_INDEX_PATH = "data/embeddings/vector_store.index"
-DEFAULT_METADATA_PATH = "data/embeddings/chunks_with_metadata.pkl" # 修改路径以反映内容
-DEFAULT_BM25_PATH = "data/embeddings/bm25_index.pkl" # 新增 BM25 索引路径
-# PDF 文件目录
-DEFAULT_PDF_DIR = "data/raw/"
+DEFAULT_INDEX_PATH = os.path.join(BASE_DIR, "data1/embeddings/vector_store.index")
+DEFAULT_METADATA_PATH = os.path.join(BASE_DIR, "data1/embeddings/chunks_with_metadata.pkl")
+DEFAULT_BM25_PATH = os.path.join(BASE_DIR, "data1/embeddings/bm25_index.pkl")
+DEFAULT_PDF_DIR = os.path.join(BASE_DIR, "data/raw/")
 class QASystem:
     """
-    问答系统类，负责检索上下文并使用 Gemini 生成答案。
+    问答系统类，负责检索上下文并使用 OpenRouter 生成答案。
     """
     def __init__(self, 
                  index_path: str = DEFAULT_INDEX_PATH,
@@ -47,22 +43,27 @@ class QASystem:
             index_path (str): FAISS 索引文件路径。
             metadata_path (str): 元数据文件路径。
             bm25_path (str): BM25 索引文件路径。
-            generation_model_name (str): 用于生成答案的 Gemini 模型名称。
+            generation_model_name (str): 用于生成答案的 OpenRouter 模型名称。
         """
         print("初始化问答系统...")
         
-        # 1. 配置 Gemini API
-        print(f"配置 Gemini API (模型: {generation_model_name})...")
-        if not GEMINI_API_KEY.startswith("AIza"): # 基本检查 API Key 格式
-             print("错误：无效的 GEMINI_API_KEY。请设置正确的 API 密钥环境变量。")
-             raise ValueError("无效的 Gemini API Key")
+        # 1. 配置 OpenRouter API
+        print(f"配置 OpenRouter API (模型: {generation_model_name})...")
+        if not OPENROUTER_API_KEY or not OPENROUTER_API_KEY.startswith("sk-or-v1-"):
+             print("错误：无效的 OPENROUTER_API_KEY。请设置正确的 API 密钥环境变量。")
+             raise ValueError("无效的 OpenRouter API Key")
         try:
-            genai.configure(api_key=GEMINI_API_KEY)
-            self.model = genai.GenerativeModel(generation_model_name)
-            print("Gemini 模型初始化成功。")
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=OPENROUTER_API_KEY,
+                timeout=60,
+                max_retries=2,
+            )
+            self.model_name = generation_model_name
+            print("OpenRouter 客户端及模型初始化成功。")
         except Exception as e:
-            print(f"错误：初始化 Gemini 模型失败: {e}")
-            raise ConnectionError(f"无法初始化 Gemini 模型 '{generation_model_name}'") from e
+            print(f"错误：初始化 OpenRouter 客户端失败: {e}")
+            raise ConnectionError(f"无法初始化 OpenRouter 客户端") from e
             
         # 2. 初始化并加载向量存储
         print("初始化并加载混合向量存储...")
@@ -100,7 +101,7 @@ class QASystem:
             search_top_k (int): 从向量存储中检索多少个相关块用于上下文。
 
         Returns:
-            str: 由 Gemini 模型生成的答案。
+            str: 由 OpenRouter 模型生成的答案。
         """
         print(f"\n收到问题: {user_question}")
         
@@ -171,39 +172,41 @@ class QASystem:
 """
         # print(f"\n--- 生成的 Prompt ---\n{prompt}\n---------------------\n") # 用于调试
 
-        # 3. 调用 Gemini 模型生成答案
-        print("正在调用 Gemini 模型生成答案...")
+        # 3. 调用 OpenRouter 模型生成答案
+        print("正在调用 OpenRouter 模型生成答案...")
         try:
-            generation_config = genai.types.GenerationConfig()
-            safety_settings=[ # 使用之前的安全设置
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-            ]
-
-            response = self.model.generate_content(
-                prompt,
-                generation_config=generation_config,
-                safety_settings=safety_settings
+            completion = self.client.chat.completions.create(
+                model=self.model_name,
+                extra_headers={
+                    "HTTP-Referer": "https://competition-qa-system.local",
+                    "X-Title": "Competition QA System",
+                },
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是一个专业、严谨且友好的竞赛信息智能客服，请始终使用中文回答。"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.2,
             )
-                
-            if response.parts:
-                 final_answer = response.text
+
+            if completion.choices and completion.choices[0].message and completion.choices[0].message.content:
+                 final_answer = completion.choices[0].message.content
                  print("生成答案成功。")
                  return final_answer
-            elif response.prompt_feedback and response.prompt_feedback.block_reason:
-                 reason = response.prompt_feedback.block_reason
-                 print(f"警告：内容生成被阻止，原因: {reason}")
-                 return f"抱歉，由于内容安全原因，无法生成回答。原因: {reason}"
             else:
-                 print("警告：Gemini 模型返回了空响应。")
-                 try: print(f"原始响应: {response}")
+                 print("警告：OpenRouter 模型返回了空响应。")
+                 try:
+                     print(f"原始响应: {completion}")
                  except Exception: pass
                  return "抱歉，无法生成回答，模型返回了空响应。"
 
         except Exception as e:
-            print(f"错误：调用 Gemini API 生成答案时出错: {e}")
+            print(f"错误：调用 OpenRouter API 生成答案时出错: {e}")
             # 可以尝试打印更详细的错误信息
             # import traceback
             # traceback.print_exc()
